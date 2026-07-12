@@ -9,19 +9,29 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: Enable long paths on Windows
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name "LongPathsEnabled" `
+            -Value 1 `
+            -PropertyType DWORD `
+            -Force
+
       - name: Checkout community task branch
         uses: actions/checkout@v4
         with:
           repository: Echo-Nie/community
           ref: swe-paddle-76259-instance
-          path: community
+          path: c
 
       - name: Checkout Paddle base commit
         uses: actions/checkout@v4
         with:
           repository: PaddlePaddle/Paddle
           ref: fcf3b100085b10efed4c1fb8880b1df1fd5241d6
-          path: Paddle
+          path: p
           submodules: recursive
 
       - name: Show environment
@@ -39,14 +49,14 @@ jobs:
       - name: Apply test patch
         shell: bash
         run: |
-          cd Paddle
-          git apply --check ../community/swe-paddle/tasks/PaddlePaddle__Paddle-76259/tests/test.patch
-          git apply ../community/swe-paddle/tasks/PaddlePaddle__Paddle-76259/tests/test.patch
+          cd p
+          git apply --check ../c/swe-paddle/tasks/PaddlePaddle__Paddle-76259/tests/test.patch
+          git apply ../c/swe-paddle/tasks/PaddlePaddle__Paddle-76259/tests/test.patch
 
       - name: Install Python requirements
         shell: bash
         run: |
-          cd Paddle
+          cd p
           python -m pip install --upgrade pip setuptools wheel
           if [ -f python/requirements.txt ]; then
             python -m pip install -r python/requirements.txt
@@ -55,7 +65,7 @@ jobs:
       - name: Configure Paddle CPU build
         shell: bash
         run: |
-          cd Paddle
+          cd p
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 \
             -DWITH_GPU=OFF \
             -DWITH_TESTING=ON \
@@ -68,7 +78,7 @@ jobs:
       - name: Build target before fix
         shell: bash
         run: |
-          cd Paddle
+          cd p
           cmake --build build --config Release --target inference_api_utf8_path_test --parallel 2
 
       - name: Run target before fix, expect failure
@@ -76,7 +86,7 @@ jobs:
         shell: bash
         continue-on-error: true
         run: |
-          cd Paddle/build
+          cd p/build
           ctest -C Release -R "^inference_api_utf8_path_test$" --output-on-failure
 
       - name: Assert before-fix failure
@@ -91,18 +101,18 @@ jobs:
       - name: Apply solution patch
         shell: bash
         run: |
-          cd Paddle
-          git apply --check ../community/swe-paddle/tasks/PaddlePaddle__Paddle-76259/solution/code.patch
-          git apply ../community/swe-paddle/tasks/PaddlePaddle__Paddle-76259/solution/code.patch
+          cd p
+          git apply --check ../c/swe-paddle/tasks/PaddlePaddle__Paddle-76259/solution/code.patch
+          git apply ../c/swe-paddle/tasks/PaddlePaddle__Paddle-76259/solution/code.patch
 
       - name: Rebuild target after fix
         shell: bash
         run: |
-          cd Paddle
+          cd p
           cmake --build build --config Release --target inference_api_utf8_path_test --parallel 2
 
       - name: Run target after fix, expect pass
         shell: bash
         run: |
-          cd Paddle/build
+          cd p/build
           ctest -C Release -R "^inference_api_utf8_path_test$" --output-on-failure
