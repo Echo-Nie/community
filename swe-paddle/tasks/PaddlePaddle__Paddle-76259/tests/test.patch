@@ -1,0 +1,113 @@
+diff --git a/test/cpp/inference/api/CMakeLists.txt b/test/cpp/inference/api/CMakeLists.txt
+--- a/test/cpp/inference/api/CMakeLists.txt
++++ b/test/cpp/inference/api/CMakeLists.txt
+@@ -1,6 +1,9 @@
+ set(inference_api_tester_deps paddle_inference_api analysis_config)
++if(WIN32)
++  cc_test(inference_api_utf8_path_test SRCS utf8_path_test.cc DEPS ${inference_api_tester_deps} common)
++endif()
+ if(NOT WIN32)
+   cc_test(
+     test_paddle_inference_api SRCS api_tester.cc DEPS ${inference_api_tester_deps}
+     common)
+diff --git a/test/cpp/inference/api/utf8_path_test.cc b/test/cpp/inference/api/utf8_path_test.cc
+new file mode 100644
+--- /dev/null
++++ b/test/cpp/inference/api/utf8_path_test.cc
+@@ -0,0 +1,86 @@
++/* Copyright (c) 2026 PaddlePaddle Authors. All Rights Reserved.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License. */
++
++#include "paddle/fluid/inference/api/helper.h"
++
++#include "gtest/gtest.h"
++
++#ifdef _WIN32
++#include <windows.h>
++
++#include <string>
++
++namespace {
++
++std::string Utf16ToUtf8(const std::wstring& input) {
++  if (input.empty()) {
++    return std::string();
++  }
++  int size = WideCharToMultiByte(CP_UTF8,
++                                 0,
++                                 input.data(),
++                                 static_cast<int>(input.size()),
++                                 nullptr,
++                                 0,
++                                 nullptr,
++                                 nullptr);
++  std::string output(size, '\0');
++  WideCharToMultiByte(CP_UTF8,
++                      0,
++                      input.data(),
++                      static_cast<int>(input.size()),
++                      &output[0],
++                      size,
++                      nullptr,
++                      nullptr);
++  return output;
++}
++
++std::wstring GetTempDirectory() {
++  wchar_t buffer[MAX_PATH];
++  DWORD length = GetTempPathW(MAX_PATH, buffer);
++  EXPECT_GT(length, 0UL);
++  EXPECT_LT(length, static_cast<DWORD>(MAX_PATH));
++  return std::wstring(buffer, length);
++}
++
++}  // namespace
++
++namespace paddle {
++
++TEST(inference_api_utf8_path, chinese_file_and_directory_on_windows) {
++  const std::wstring test_dir =
++      GetTempDirectory() + L"paddle_inference_模型路径测试";
++  const std::wstring test_file = test_dir + L"\\inference.pdmodel";
++
++  DeleteFileW(test_file.c_str());
++  RemoveDirectoryW(test_dir.c_str());
++
++  ASSERT_TRUE(CreateDirectoryW(test_dir.c_str(), nullptr) ||
++              GetLastError() == ERROR_ALREADY_EXISTS);
++
++  HANDLE handle = CreateFileW(test_file.c_str(),
++                              GENERIC_WRITE,
++                              0,
++                              nullptr,
++                              CREATE_ALWAYS,
++                              FILE_ATTRIBUTE_NORMAL,
++                              nullptr);
++  ASSERT_NE(handle, INVALID_HANDLE_VALUE);
++
++  const char content[] = "fake model file";
++  DWORD written = 0;
++  ASSERT_TRUE(WriteFile(
++      handle, content, sizeof(content) - 1, &written, nullptr));
++  CloseHandle(handle);
++
++  EXPECT_TRUE(paddle::inference::IsDirectory(Utf16ToUtf8(test_dir)));
++  EXPECT_TRUE(paddle::inference::IsFileExists(Utf16ToUtf8(test_file)));
++
++  DeleteFileW(test_file.c_str());
++  RemoveDirectoryW(test_dir.c_str());
++}
++
++}  // namespace paddle
++#endif
