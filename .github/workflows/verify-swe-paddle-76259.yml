@@ -1,0 +1,108 @@
+name: Verify SWE-Paddle 76259
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout community task branch
+        uses: actions/checkout@v4
+        with:
+          repository: Echo-Nie/community
+          ref: swe-paddle-76259-instance
+          path: community
+
+      - name: Checkout Paddle base commit
+        uses: actions/checkout@v4
+        with:
+          repository: PaddlePaddle/Paddle
+          ref: fcf3b100085b10efed4c1fb8880b1df1fd5241d6
+          path: Paddle
+          submodules: recursive
+
+      - name: Show environment
+        shell: bash
+        run: |
+          uname -a
+          cmd //c ver
+          python --version
+          cmake --version
+          git --version
+          where cl || true
+          where cmake || true
+          where python || true
+
+      - name: Apply test patch
+        shell: bash
+        run: |
+          cd Paddle
+          git apply --check ../community/swe-paddle/tasks/PaddlePaddle__Paddle-76259/tests/test.patch
+          git apply ../community/swe-paddle/tasks/PaddlePaddle__Paddle-76259/tests/test.patch
+
+      - name: Install Python requirements
+        shell: bash
+        run: |
+          cd Paddle
+          python -m pip install --upgrade pip setuptools wheel
+          if [ -f python/requirements.txt ]; then
+            python -m pip install -r python/requirements.txt
+          fi
+
+      - name: Configure Paddle CPU build
+        shell: bash
+        run: |
+          cd Paddle
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 \
+            -DWITH_GPU=OFF \
+            -DWITH_TESTING=ON \
+            -DWITH_INFERENCE_API_TEST=ON \
+            -DON_INFER=ON \
+            -DWITH_DISTRIBUTE=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPYTHON_EXECUTABLE="$(which python)"
+
+      - name: Build target before fix
+        shell: bash
+        run: |
+          cd Paddle
+          cmake --build build --config Release --target inference_api_utf8_path_test --parallel 2
+
+      - name: Run target before fix, expect failure
+        id: before_fix
+        shell: bash
+        continue-on-error: true
+        run: |
+          cd Paddle/build
+          ctest -C Release -R "^inference_api_utf8_path_test$" --output-on-failure
+
+      - name: Assert before-fix failure
+        shell: bash
+        run: |
+          echo "before-fix outcome: ${{ steps.before_fix.outcome }}"
+          if [ "${{ steps.before_fix.outcome }}" != "failure" ]; then
+            echo "Expected the test to fail before applying solution/code.patch, but it did not fail."
+            exit 1
+          fi
+
+      - name: Apply solution patch
+        shell: bash
+        run: |
+          cd Paddle
+          git apply --check ../community/swe-paddle/tasks/PaddlePaddle__Paddle-76259/solution/code.patch
+          git apply ../community/swe-paddle/tasks/PaddlePaddle__Paddle-76259/solution/code.patch
+
+      - name: Rebuild target after fix
+        shell: bash
+        run: |
+          cd Paddle
+          cmake --build build --config Release --target inference_api_utf8_path_test --parallel 2
+
+      - name: Run target after fix, expect pass
+        shell: bash
+        run: |
+          cd Paddle/build
+          ctest -C Release -R "^inference_api_utf8_path_test$" --output-on-failure
