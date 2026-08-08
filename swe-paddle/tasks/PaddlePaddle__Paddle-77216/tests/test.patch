@@ -1,0 +1,125 @@
+diff --git a/test/swe_paddle/test_pr77216_cuda_arch_flags.py b/test/swe_paddle/test_pr77216_cuda_arch_flags.py
+new file mode 100644
+index 00000000000000..11111111111111
+--- /dev/null
++++ b/test/swe_paddle/test_pr77216_cuda_arch_flags.py
+@@ -0,0 +1,119 @@
++import ast
++import collections
++import os
++import types
++import warnings
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[2]
++SOURCE = REPO_ROOT / "python/paddle/utils/cpp_extension/extension_utils.py"
++
++
++class _FakeCore:
++    def __init__(self, compiled_with_cuda=False):
++        self._compiled_with_cuda = compiled_with_cuda
++
++    def is_compiled_with_rocm(self):
++        return False
++
++    def is_compiled_with_custom_device(self, *_args):
++        return False
++
++    def is_compiled_with_cuda(self):
++        return self._compiled_with_cuda
++
++    def get_all_custom_device_type(self):
++        return []
++
++
++class _FakeCuda:
++    def __init__(self, capabilities):
++        self._capabilities = list(capabilities)
++
++    def device_count(self):
++        return len(self._capabilities)
++
++    def get_device_capability(self, dev_id):
++        return self._capabilities[dev_id]
++
++
++def _fake_paddle(capabilities=()):
++    return types.SimpleNamespace(
++        device=types.SimpleNamespace(cuda=_FakeCuda(capabilities))
++    )
++
++
++def _load_checkout_prepare_unix(*, compiled_with_cuda=False, capabilities=()):
++    tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
++    wanted = {
++        "prepare_unix_cudaflags",
++        "get_cuda_arch_flags",
++        "_get_cuda_arch_flags",
++    }
++    nodes = [
++        node
++        for node in tree.body
++        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
++        and node.name in wanted
++    ]
++    names = {node.name for node in nodes}
++    assert "prepare_unix_cudaflags" in names
++    assert {"get_cuda_arch_flags", "_get_cuda_arch_flags"} & names
++
++    namespace = {
++        "collections": collections,
++        "core": _FakeCore(compiled_with_cuda=compiled_with_cuda),
++        "os": os,
++        "paddle": _fake_paddle(capabilities),
++        "warnings": warnings,
++        "COMMON_NVCC_FLAGS": ["-DPADDLE_WITH_CUDA", "-DEIGEN_USE_GPU"],
++        "COMMON_HIPCC_FLAGS": [],
++    }
++    module = ast.Module(body=nodes, type_ignores=[])
++    ast.fix_missing_locations(module)
++    exec(compile(module, str(SOURCE), "exec"), namespace)
++    return namespace["prepare_unix_cudaflags"]
++
++
++def _arch_flags(cflags):
++    return [flag for flag in cflags if flag.startswith("-gencode=arch=")]
++
++
++def test_p2p_user_provided_arch_flag_is_preserved_without_duplication(monkeypatch):
++    monkeypatch.setenv("PADDLE_CUDA_ARCH_LIST", "8.6")
++    prepare = _load_checkout_prepare_unix()
++    provided = "-gencode=arch=compute_80,code=sm_80"
++
++    result = prepare([provided])
++
++    assert result.count(provided) == 1
++    assert _arch_flags(result) == [provided]
++
++
++def test_f2p_dlink_flags_follow_explicit_cuda_arch_list(monkeypatch):
++    monkeypatch.setenv("PADDLE_CUDA_ARCH_LIST", "8.0;8.6+PTX")
++    prepare = _load_checkout_prepare_unix()
++
++    result = set(_arch_flags(prepare([])))
++
++    assert result == {
++        "-gencode=arch=compute_80,code=sm_80",
++        "-gencode=arch=compute_86,code=sm_86",
++        "-gencode=arch=compute_86,code=compute_86",
++    }
++
++
++def test_f2p_dlink_flags_follow_visible_gpu_capabilities(monkeypatch):
++    monkeypatch.delenv("PADDLE_CUDA_ARCH_LIST", raising=False)
++    prepare = _load_checkout_prepare_unix(
++        compiled_with_cuda=True,
++        capabilities=[(8, 0), (8, 6), (8, 0)],
++    )
++
++    result = set(_arch_flags(prepare([])))
++
++    assert result == {
++        "-gencode=arch=compute_80,code=sm_80",
++        "-gencode=arch=compute_86,code=sm_86",
++        "-gencode=arch=compute_86,code=compute_86",
++    }
